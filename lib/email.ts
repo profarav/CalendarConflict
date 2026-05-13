@@ -1,8 +1,16 @@
-import { Resend } from 'resend'
+import nodemailer from 'nodemailer'
 import { Conflict } from './conflicts'
 import { format, parseISO } from 'date-fns'
 
-const resend = new Resend(process.env.RESEND_API_KEY)
+function getTransporter() {
+  return nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+      user: process.env.GMAIL_USER,
+      pass: process.env.GMAIL_APP_PASSWORD,
+    },
+  })
+}
 
 function formatDateTime(iso: string) {
   return format(parseISO(iso), 'EEE, MMM d · h:mm a')
@@ -91,12 +99,10 @@ export async function sendConflictReport({
     </html>
   `
 
-  const { error } = await resend.emails.send({
-    from: 'Calendar Conflict Checker <reports@resend.dev>',
+  await getTransporter().sendMail({
+    from: `Calendar Conflict Checker <${process.env.GMAIL_USER}>`,
     to: recipientEmail,
     subject: `Calendar Conflict Report: Week of ${weekLabel}`,
     html,
   })
-
-  if (error) throw new Error(`Failed to send email: ${error.message}`)
 }

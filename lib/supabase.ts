@@ -1,10 +1,8 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 
 export function getSupabase(): SupabaseClient {
-  return createClient(
-    process.env.SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  )
+  const url = process.env.SUPABASE_URL!.replace(/\/$/, '')
+  return createClient(url, process.env.SUPABASE_SERVICE_ROLE_KEY!)
 }
 
 export const supabase = new Proxy({} as SupabaseClient, {
