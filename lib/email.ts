@@ -90,6 +90,8 @@ export async function sendConflictReport({
         <p style="color: #374151;">Here is your calendar conflict report for <strong>${dateRange}</strong>.</p>
         ${bodyHtml}
         <div style="margin-top: 32px; padding-top: 16px; border-top: 1px solid #e5e7eb; color: #9ca3af; font-size: 12px;">
+          This is an automated email — please do not reply.
+          <br><br>
           This report checks only direct overlapping meetings (events where one starts before another ends).
           <br><br>
           Manage your report settings at <a href="${process.env.APP_URL}/dashboard" style="color: #4f46e5;">${process.env.APP_URL}/dashboard</a>

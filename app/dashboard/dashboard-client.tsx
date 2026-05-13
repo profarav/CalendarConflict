@@ -122,6 +122,7 @@ export default function DashboardClient({ user, connections: initialConnections,
   const [recipientEmail, setRecipientEmail] = useState(initialSettings?.recipient_email || user.email)
   const [saving, setSaving] = useState(false)
   const [sendingTest, setSendingTest] = useState(false)
+  const [toggling, setToggling] = useState(false)
   const [settings, setSettings] = useState<Settings | null>(initialSettings)
 
   const calendarOptions: CalendarOption[] = calendarGroups.flatMap((g) =>
@@ -216,6 +217,21 @@ export default function DashboardClient({ user, connections: initialConnections,
       toast.error(err.message)
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function handleToggle() {
+    setToggling(true)
+    try {
+      const res = await fetch('/api/settings/toggle', { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setSettings(data)
+      toast.success(data.active ? 'Reports resumed.' : 'Reports paused.')
+    } catch (err: any) {
+      toast.error(err.message)
+    } finally {
+      setToggling(false)
     }
   }
 
@@ -569,16 +585,25 @@ export default function DashboardClient({ user, connections: initialConnections,
                 </div>
               </dl>
 
-              {settings.active && (
-                <div className="mt-4 p-3 rounded-lg bg-green-50 border border-green-100">
-                  <p className="text-sm text-green-700 flex items-center gap-2">
-                    <svg className="w-4 h-4 shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clipRule="evenodd" />
-                    </svg>
-                    Your weekly conflict report is active. Reports will send automatically every {settings.report_day === 'friday' ? 'Friday' : 'Monday'} morning.
-                  </p>
-                </div>
-              )}
+              <div className={`mt-4 p-3 rounded-lg border flex items-center justify-between gap-4 ${settings.active ? 'bg-green-50 border-green-100' : 'bg-gray-50 border-gray-200'}`}>
+                <p className={`text-sm flex items-center gap-2 ${settings.active ? 'text-green-700' : 'text-gray-500'}`}>
+                  <svg className="w-4 h-4 shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clipRule="evenodd" />
+                  </svg>
+                  {settings.active
+                    ? `Reports send automatically every ${settings.report_day === 'friday' ? 'Friday' : 'Monday'} morning.`
+                    : 'Reports are paused. Resume to restart automatic sending.'}
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleToggle}
+                  disabled={toggling}
+                  className="shrink-0"
+                >
+                  {toggling ? '…' : settings.active ? 'Pause' : 'Resume'}
+                </Button>
+              </div>
             </CardContent>
           </Card>
         )}
