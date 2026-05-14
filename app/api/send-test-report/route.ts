@@ -1,11 +1,11 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { NextResponse } from 'next/server'
 import { getSession } from '@/lib/session'
 import { supabase } from '@/lib/supabase'
 import { fetchCalendarEvents } from '@/lib/google'
 import { detectConflicts, getWeekWindow } from '@/lib/conflicts'
 import { sendConflictReport } from '@/lib/email'
 
-export async function POST(req: NextRequest) {
+export async function POST() {
   const session = await getSession()
   if (!session) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -61,8 +61,9 @@ export async function POST(req: NextRequest) {
       conflictCount: conflicts.length,
       sentTo: settings.recipient_email,
     })
-  } catch (err: any) {
+  } catch (err) {
     console.error('Test report error:', err)
-    return NextResponse.json({ error: err.message || 'Failed to send report' }, { status: 500 })
+    const message = err instanceof Error ? err.message : 'Failed to send report'
+    return NextResponse.json({ error: message }, { status: 500 })
   }
 }

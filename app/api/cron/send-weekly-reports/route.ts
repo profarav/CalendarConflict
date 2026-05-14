@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { supabase, type Database } from '@/lib/supabase'
 import { fetchCalendarEvents } from '@/lib/google'
 import { detectConflicts, getWeekWindow } from '@/lib/conflicts'
 import { sendConflictReport } from '@/lib/email'
+
+type ReportSettingsWithUser = Database['calendar_report_settings'] & {
+  users: Pick<Database['users'], 'name' | 'email'> | null
+}
 
 export async function GET(req: NextRequest) {
   // Protect with CRON_SECRET
@@ -60,7 +64,7 @@ export async function GET(req: NextRequest) {
 
       const conflicts = detectConflicts(eventsA, eventsB)
 
-      const user = (settings as any).users
+      const user = (settings as ReportSettingsWithUser).users
       await sendConflictReport({
         recipientEmail: settings.recipient_email,
         userName: user?.name || null,

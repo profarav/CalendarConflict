@@ -1,8 +1,9 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import { toast } from 'sonner'
 import { format, parseISO } from 'date-fns'
+import { Loader2, Plus, Send } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -31,6 +32,12 @@ interface CalendarOption {
   calendarId: string
   summary: string
   primary: boolean
+}
+
+interface CalendarGroup {
+  connectionId: string
+  googleEmail: string
+  calendars: { id: string; summary: string; primary: boolean }[]
 }
 
 interface Settings {
@@ -79,9 +86,24 @@ const TIMEZONES = [
   'Australia/Sydney',
 ]
 
+const REPORT_DAY_LABELS: Record<string, string> = {
+  friday: 'Friday morning',
+  monday: 'Monday morning',
+}
+
 function formatTs(ts: string | null) {
   if (!ts) return 'Never'
   return format(parseISO(ts), 'MMM d, yyyy · h:mm a')
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback
+}
+
+async function loadCalendarGroups(signal?: AbortSignal): Promise<CalendarGroup[]> {
+  const res = await fetch('/api/google/calendars', { signal })
+  if (!res.ok) throw new Error('Failed to fetch calendars')
+  return res.json()
 }
 
 function Avatar({ user }: { user: User }) {
@@ -103,7 +125,7 @@ function Avatar({ user }: { user: User }) {
 
 export default function DashboardClient({ user, connections: initialConnections, initialSettings }: Props) {
   const [connections, setConnections] = useState<Connection[]>(initialConnections)
-  const [calendarGroups, setCalendarGroups] = useState<{ connectionId: string; googleEmail: string; calendars: { id: string; summary: string; primary: boolean }[] }[]>([])
+  const [calendarGroups, setCalendarGroups] = useState<CalendarGroup[]>([])
   const [calendarsLoading, setCalendarsLoading] = useState(true)
   const [disconnecting, setDisconnecting] = useState<string | null>(null)
 
@@ -136,29 +158,48 @@ export default function DashboardClient({ user, connections: initialConnections,
   )
 
   const getCalLabel = (key: string) => {
+    if (!key) return 'Select a calendar…'
     const [connId, calId] = key.split('::')
     const opt = calendarOptions.find((o) => o.connectionId === connId && o.calendarId === calId)
-    if (!opt) return key
+    if (!opt) return calId || 'Calendar unavailable'
     return `${opt.summary} (${opt.googleEmail})`
   }
 
-  const fetchCalendars = useCallback(async () => {
-    setCalendarsLoading(true)
+  const getReportDayLabel = (value: string | null) =>
+    value ? REPORT_DAY_LABELS[value] || value : 'When to send…'
+
+  async function fetchCalendars() {
     try {
-      const res = await fetch('/api/google/calendars')
-      if (!res.ok) throw new Error('Failed to fetch calendars')
-      const data = await res.json()
+      const data = await loadCalendarGroups()
       setCalendarGroups(data)
     } catch {
       toast.error('Failed to load calendars')
     } finally {
       setCalendarsLoading(false)
     }
-  }, [])
+  }
 
   useEffect(() => {
-    fetchCalendars()
-  }, [fetchCalendars])
+    const controller = new AbortController()
+    let active = true
+
+    loadCalendarGroups(controller.signal)
+      .then((data) => {
+        if (active) setCalendarGroups(data)
+      })
+      .catch((err) => {
+        if (!active || (err instanceof DOMException && err.name === 'AbortError')) return
+        toast.error('Failed to load calendars')
+      })
+      .finally(() => {
+        if (active) setCalendarsLoading(false)
+      })
+
+    return () => {
+      active = false
+      controller.abort()
+    }
+  }, [])
 
   async function handleDisconnect(connectionId: string, email: string) {
     if (!confirm(`Disconnect ${email}? Any active report using this account will be paused.`)) return
@@ -169,9 +210,10 @@ export default function DashboardClient({ user, connections: initialConnections,
       if (!res.ok) throw new Error(data.error || 'Failed to disconnect')
       setConnections((prev) => prev.filter((c) => c.id !== connectionId))
       toast.success(`Disconnected ${email}`)
-      fetchCalendars()
-    } catch (err: any) {
-      toast.error(err.message)
+      setCalendarsLoading(true)
+      await fetchCalendars()
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Failed to disconnect'))
     } finally {
       setDisconnecting(null)
     }
@@ -213,8 +255,8 @@ export default function DashboardClient({ user, connections: initialConnections,
       if (!res.ok) throw new Error(data.error || 'Failed to save')
       setSettings(data)
       toast.success('Setup saved! Your weekly conflict report is now active.')
-    } catch (err: any) {
-      toast.error(err.message)
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Failed to save'))
     } finally {
       setSaving(false)
     }
@@ -228,8 +270,8 @@ export default function DashboardClient({ user, connections: initialConnections,
       if (!res.ok) throw new Error(data.error)
       setSettings(data)
       toast.success(data.active ? 'Reports resumed.' : 'Reports paused.')
-    } catch (err: any) {
-      toast.error(err.message)
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Failed to update reports'))
     } finally {
       setToggling(false)
     }
@@ -243,8 +285,8 @@ export default function DashboardClient({ user, connections: initialConnections,
       if (!res.ok) throw new Error(data.error || 'Failed to send test report')
       setSettings((prev) => prev ? { ...prev, last_test_sent_at: new Date().toISOString() } : prev)
       toast.success(`Test report sent! Found ${data.conflictCount} conflict${data.conflictCount !== 1 ? 's' : ''}.`)
-    } catch (err: any) {
-      toast.error(err.message)
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Failed to send test report'))
     } finally {
       setSendingTest(false)
     }
@@ -281,18 +323,16 @@ export default function DashboardClient({ user, connections: initialConnections,
         {/* Section 1: Connected Accounts */}
         <Card>
           <CardHeader>
-            <div className="flex items-center justify-between">
-              <div>
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
                 <CardTitle className="text-base">Connected Google Accounts</CardTitle>
                 <CardDescription className="mt-1">
                   Calendars from all connected accounts are available to compare.
                 </CardDescription>
               </div>
               <a href="/api/auth/google/start?add=true">
-                <Button size="sm" variant="outline" className="shrink-0">
-                  <svg className="w-4 h-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-                  </svg>
+                <Button size="lg" variant="outline" className="h-10 shrink-0 px-4 text-sm font-semibold sm:h-11 sm:px-5">
+                  <Plus className="size-4" />
                   Connect account
                 </Button>
               </a>
@@ -308,8 +348,8 @@ export default function DashboardClient({ user, connections: initialConnections,
                     key={conn.id}
                     className="flex items-center justify-between p-3 rounded-lg border border-gray-100 bg-gray-50 hover:bg-gray-100 transition-colors"
                   >
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <div className="w-8 h-8 shrink-0 rounded-full bg-indigo-100 flex items-center justify-center">
                         <svg className="w-4 h-4 text-indigo-600" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
                           <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4" />
                           <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
@@ -317,8 +357,8 @@ export default function DashboardClient({ user, connections: initialConnections,
                           <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335" />
                         </svg>
                       </div>
-                      <div>
-                        <p className="text-sm font-medium text-gray-900">{conn.google_email}</p>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-gray-900">{conn.google_email}</p>
                         <p className="text-xs text-gray-400">Connected {format(parseISO(conn.created_at), 'MMM d, yyyy')}</p>
                       </div>
                     </div>
@@ -367,11 +407,13 @@ export default function DashboardClient({ user, connections: initialConnections,
               <>
                 <div className="grid gap-5 sm:grid-cols-2">
                   {/* Calendar 1 */}
-                  <div className="space-y-1.5">
+                  <div className="min-w-0 space-y-1.5">
                     <Label className="text-sm font-medium">Calendar 1</Label>
                     <Select value={cal1Key} onValueChange={(v) => setCal1Key(v ?? '')}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select a calendar…" />
+                      <SelectTrigger className="h-10">
+                        <SelectValue className="truncate" placeholder="Select a calendar…">
+                          {(value) => getCalLabel(value)}
+                        </SelectValue>
                       </SelectTrigger>
                       <SelectContent>
                         {calendarGroups.map((group) => (
@@ -381,13 +423,13 @@ export default function DashboardClient({ user, connections: initialConnections,
                               const key = `${group.connectionId}::${cal.id}`
                               const isDisabled = key === cal2Key
                               return (
-                                <SelectItem key={key} value={key} disabled={isDisabled}>
-                                  <span className="flex items-center gap-1.5">
+                                <SelectItem key={key} value={key} disabled={isDisabled} label={`${cal.summary} (${group.googleEmail})`}>
+                                  <span className="flex min-w-0 items-center gap-1.5">
                                     {cal.primary && (
-                                      <span className="inline-block w-1.5 h-1.5 rounded-full bg-indigo-500" />
+                                      <span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-indigo-500" />
                                     )}
-                                    {cal.summary}
-                                    <span className="text-xs text-gray-400">({group.googleEmail})</span>
+                                    <span className="min-w-0 truncate">{cal.summary}</span>
+                                    <span className="shrink-0 text-xs text-gray-400">({group.googleEmail})</span>
                                   </span>
                                 </SelectItem>
                               )
@@ -399,11 +441,13 @@ export default function DashboardClient({ user, connections: initialConnections,
                   </div>
 
                   {/* Calendar 2 */}
-                  <div className="space-y-1.5">
+                  <div className="min-w-0 space-y-1.5">
                     <Label className="text-sm font-medium">Calendar 2</Label>
                     <Select value={cal2Key} onValueChange={(v) => setCal2Key(v ?? '')}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select a calendar…" />
+                      <SelectTrigger className="h-10">
+                        <SelectValue className="truncate" placeholder="Select a calendar…">
+                          {(value) => getCalLabel(value)}
+                        </SelectValue>
                       </SelectTrigger>
                       <SelectContent>
                         {calendarGroups.map((group) => (
@@ -413,13 +457,13 @@ export default function DashboardClient({ user, connections: initialConnections,
                               const key = `${group.connectionId}::${cal.id}`
                               const isDisabled = key === cal1Key
                               return (
-                                <SelectItem key={key} value={key} disabled={isDisabled}>
-                                  <span className="flex items-center gap-1.5">
+                                <SelectItem key={key} value={key} disabled={isDisabled} label={`${cal.summary} (${group.googleEmail})`}>
+                                  <span className="flex min-w-0 items-center gap-1.5">
                                     {cal.primary && (
-                                      <span className="inline-block w-1.5 h-1.5 rounded-full bg-indigo-500" />
+                                      <span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-indigo-500" />
                                     )}
-                                    {cal.summary}
-                                    <span className="text-xs text-gray-400">({group.googleEmail})</span>
+                                    <span className="min-w-0 truncate">{cal.summary}</span>
+                                    <span className="shrink-0 text-xs text-gray-400">({group.googleEmail})</span>
                                   </span>
                                 </SelectItem>
                               )
@@ -433,11 +477,13 @@ export default function DashboardClient({ user, connections: initialConnections,
 
                 <div className="grid gap-5 sm:grid-cols-2">
                   {/* Report timing */}
-                  <div className="space-y-1.5">
+                  <div className="min-w-0 space-y-1.5">
                     <Label className="text-sm font-medium">Report timing</Label>
                     <Select value={reportDay} onValueChange={(v) => setReportDay(v ?? '')}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="When to send…" />
+                      <SelectTrigger className="h-10">
+                        <SelectValue placeholder="When to send…">
+                          {(value) => getReportDayLabel(value)}
+                        </SelectValue>
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="friday">
@@ -457,10 +503,10 @@ export default function DashboardClient({ user, connections: initialConnections,
                   </div>
 
                   {/* Timezone */}
-                  <div className="space-y-1.5">
+                  <div className="min-w-0 space-y-1.5">
                     <Label className="text-sm font-medium">Timezone</Label>
                     <Select value={timezone} onValueChange={(v) => setTimezone(v ?? 'America/Chicago')}>
-                      <SelectTrigger>
+                      <SelectTrigger className="h-10">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -494,10 +540,7 @@ export default function DashboardClient({ user, connections: initialConnections,
                   >
                     {saving ? (
                       <span className="flex items-center gap-2">
-                        <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                        </svg>
+                        <Loader2 className="size-4 animate-spin" />
                         Saving…
                       </span>
                     ) : 'Save Setup'}
@@ -519,9 +562,7 @@ export default function DashboardClient({ user, connections: initialConnections,
                         </span>
                       ) : (
                         <>
-                          <svg className="w-4 h-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 12 3.269 3.125A59.769 59.769 0 0 1 21.485 12 59.768 59.768 0 0 1 3.27 20.875L5.999 12Zm0 0h7.5" />
-                          </svg>
+                          <Send className="size-4" />
                           Send Test Report
                         </>
                       )}
